@@ -1,4 +1,5 @@
 from datetime import datetime
+from inspect import isclass
 import json
 import requests
 import threading
@@ -8,11 +9,12 @@ from bs4 import BeautifulSoup
 # pip install lxml
 
 PATH = 'config.json'
-ali_currency, cbr_currency  = (-1, -1)
+ali_currency, cbr_currency, qiwi_currency  = (-1, -1, -1)
+
 
 ali_page = 'https://helpix.ru/currency/'
 cbr_page = 'https://www.cbr.ru/key-indicators/'
-qiwi_page = 'https://qiwi.com/payment/exchange'
+qiwi_page = 'https://edge.qiwi.com/sinap/crossRates'
 
 user_agent = {'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
             'Referer': 'https://www.google.com/',
@@ -88,11 +90,28 @@ def parse_cbr():
         currency = catalog[5]
         currency = currency.replace(',', '.')
         currency = float(currency)
+        currency = round(currency, 2)
 
         return currency
     except Exception as e:
         print(f"[parse_cbr][error]: {e}")
         return -1
+
+def parse_qiwi():
+    s = requests.Session()
+    s.headers = {'content-type': 'application/json'}
+    #s.headers['authorization'] = 'Bearer ' + api_access_token
+    s.headers['User-Agent'] = 'Android v3.2.0 MKT'
+    s.headers['Accept'] = 'application/json'
+    res = s.get('https://edge.qiwi.com/sinap/crossRates')
+
+    rates = res.json()['result']
+    rate = [x for x in rates if x['from'] == '643' and x['to'] == '840']
+    if (len(rate) == 0):
+        print('[parse_qiwi] dont exists this currencies')
+        return -1
+    else:
+        return rate[0]['rate']
 
 # constantly compare courses and send information 
 def receiving_currency():
@@ -101,6 +120,8 @@ def receiving_currency():
     
     global ali_currency
     global cbr_currency
+    global qiwi_currency
+
     is_changed = False
 
     new_parse = parse_aliexpress()
@@ -109,6 +130,12 @@ def receiving_currency():
         ali_currency = parse_aliexpress()
         is_changed = True
     
+    new_parse = parse_qiwi()
+    print(f'[receiving_currency] qiwi reply: {new_parse}')
+    if qiwi_currency != new_parse:
+        qiwi_currency = parse_qiwi()
+        is_changed = True
+
     new_parse = parse_cbr()
     print(f'[receiving_currency] сbr reply: {new_parse}')
     if new_parse != -1:
@@ -121,17 +148,20 @@ def receiving_currency():
         datatime = datetime.now()
         datatime = datatime.strftime('%Y-%m-%d %H:%M:%S')
 
-        message = f'<b>🔸 Состояние курсов на <i>{datatime}</i></b>\n\n\
-            <b>Aliexpress:</b> {ali_currency} руб.\n\
-            <b>Центральный банк:</b> {cbr_currency} руб.'
+        message = f'<b>🔸 Состояние курсов на <i>{datatime}</i></b>\n\n<b>Aliexpress:</b> {ali_currency} руб.\n<b>Киви:</b> {qiwi_currency} руб.\n<b>ЦБР:</b> {cbr_currency} руб.'
 
         with open(PATH) as f:
             data = json.load(f)
             f.close
         for i in range(len(data['users_id'])):
             id = data['users_id'][i]['id']
-            bot.send_message(id, message, parse_mode='HTML')
-            print(f'[receiving_currency] currency send to {id} id')
+            print('\n')
+            try:
+                bot.send_message(id, message, parse_mode='HTML')
+                print(f'[receiving_currency] currency send to {id} id')
+            except Exception as e:
+                print(f'[receiving_currency][error] currency ERROR send to {id} id')
+
 
 token, users = json_load()
 bot = telebot.TeleBot(token, parse_mode=None)
@@ -141,7 +171,11 @@ def reg_message(message):
     if json_add_user(message.chat.id) == 0:
         bot.send_message(message.chat.id, '<b>Ваш профиль уже зарегистрирован в системе.</b> Ожидайте обновления курса', parse_mode='HTML')
     else:
-        bot.send_message(message.chat.id, '<b>Вы успешно зарегистрировались в системе.</b> Ожидайте обновления курса', parse_mode='HTML')
+        bot.send_message(message.chat.id, '<b>Вы успешно зарегистрировались в системе.</b>', parse_mode='HTML')
+        sended_message = bot.send_message(message.chat.id, '<b>Актуальные ссылки для сверки информации:</b>\n\nhttps://helpix.ru/currency/\nhttps://www.cbr.ru/key-indicators/\nhttps://qiwi.com/payment/exchange', parse_mode='HTML')
+        bot.pin_chat_message(message.chat.id, sended_message.id, disable_notification=False)
+        bot.send_message(message.chat.id, 'Ожидайте обновления курса')
 
+print('[info] script started')
 receiving_currency()
 bot.infinity_polling(none_stop=True)
