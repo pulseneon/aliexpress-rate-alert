@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 PATH = 'config.json'
 ali_currency, cbr_currency, qiwi_currency  = (-1, -1, -1)
 
-
 ali_page = 'https://helpix.ru/currency/'
 cbr_page = 'https://www.cbr.ru/key-indicators/'
 qiwi_page = 'https://edge.qiwi.com/sinap/crossRates'
@@ -20,6 +19,7 @@ user_agent = {'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
             'Referer': 'https://www.google.com/',
             'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'}
 
+counter = 0
 
 def json_load():
     with open(PATH) as f:
@@ -45,7 +45,6 @@ def json_add_user(id):
 
         id_template = {'id': id}
         data['users_id'].append(id_template)
-        print(data)
         f.close
     with open(PATH, 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -73,6 +72,7 @@ def parse_aliexpress():
         currency = catalog[2]
     return currency
 
+
 # parse dollar exchange rate сbr
 def parse_cbr():
     try:
@@ -97,6 +97,7 @@ def parse_cbr():
         print(f"[parse_cbr][error]: {e}")
         return -1
 
+
 def parse_qiwi():
     s = requests.Session()
     s.headers = {'content-type': 'application/json'}
@@ -113,6 +114,21 @@ def parse_qiwi():
     else:
         return rate[0]['rate']
 
+
+#form the currency difference as a str
+def form_difference(old, new):
+    if (old == new):
+        return ''
+    if (old == -1):
+        return ''
+    else:
+        diff = new - old
+        if (diff > 0):
+            return f' (📉 упал на {round(diff, 3)} руб)'
+        else:
+            return f' (📈 вырос на {round(abs(diff), 3)} руб)'
+
+
 # constantly compare courses and send information 
 def receiving_currency():
     threading.Timer(1000, receiving_currency).start()
@@ -121,41 +137,51 @@ def receiving_currency():
     global ali_currency
     global cbr_currency
     global qiwi_currency
+    global counter
 
     is_changed = False
 
-    new_parse = parse_aliexpress()
+    new_parse = float(parse_aliexpress())
+    ali_difference = form_difference(ali_currency, new_parse) 
     print(f'[receiving_currency] ali reply: {new_parse}')
-    if ali_currency != new_parse:
-        ali_currency = parse_aliexpress()
+    if ali_currency != new_parse:  
+        ali_currency = new_parse
         is_changed = True
     
     new_parse = parse_qiwi()
+    qiwi_difference = form_difference(qiwi_currency, new_parse)
     print(f'[receiving_currency] qiwi reply: {new_parse}')
     if qiwi_currency != new_parse:
-        qiwi_currency = parse_qiwi()
+        qiwi_currency = new_parse
         is_changed = True
 
     new_parse = parse_cbr()
     print(f'[receiving_currency] сbr reply: {new_parse}')
+    cbr_difference = form_difference(cbr_currency, new_parse)
     if new_parse != -1:
         if cbr_currency != new_parse:
-            cbr_currency = parse_cbr()
+            cbr_currency = new_parse
             is_changed = True
 
     # formation message
     if is_changed:
         datatime = datetime.now()
         datatime = datatime.strftime('%Y-%m-%d %H:%M:%S')
+        
+        counter+=1
 
-        message = f'<b>🔸 Состояние курсов на <i>{datatime}</i></b>\n\n<b>Aliexpress:</b> {ali_currency} руб.\n<b>Киви:</b> {qiwi_currency} руб.\n<b>ЦБР:</b> {cbr_currency} руб.'
-
+        if (counter%2==0):
+            message = f'<b>🔹 Состояние курсов на {datatime}</b>\n\n<b>Aliexpress:</b> {ali_currency} руб{ali_difference}\n<b>Киви:</b> {qiwi_currency} руб{qiwi_difference}\n<b>ЦБР:</b> {cbr_currency} руб{cbr_difference}'
+        else:
+            message = f'<b>🔸 Состояние курсов на {datatime}</b>\n\n<b>Aliexpress:</b> {ali_currency} руб{ali_difference}\n<b>Киви:</b> {qiwi_currency} руб{qiwi_difference}\n<b>ЦБР:</b> {cbr_currency} руб{cbr_difference}'
+        
         with open(PATH) as f:
             data = json.load(f)
             f.close
+
+        print('\n')
         for i in range(len(data['users_id'])):
             id = data['users_id'][i]['id']
-            print('\n')
             try:
                 bot.send_message(id, message, parse_mode='HTML')
                 print(f'[receiving_currency] currency send to {id} id')
